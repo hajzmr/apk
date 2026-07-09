@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">حجز موريتانيا</string>
+    <string name="default_notification_channel_id">booking_updates</string>
+    <string name="default_notification_channel_name">تحديثات الحجوزات</string>
+    <!-- عدّل هذا الرابط إذا تغيّر نطاق الموقع -->
+    <string name="base_url" translatable="false">https://www.hajzmr.com/</string>
+</resources>

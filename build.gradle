@@ -1,0 +1,23 @@
+// Top-level build file
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.2.2'
+        // Google Services plugin — يقرأ google-services.json ويربط المشروع بـ Firebase
+        classpath 'com.google.gms:google-services:4.4.1'
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+task clean(type: Delete) {
+    delete rootProject.buildDir
+}

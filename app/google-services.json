@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "239287572238",
+    "project_id": "hajzmr-de1e5",
+    "storage_bucket": "hajzmr-de1e5.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:239287572238:android:00f6aa08a8bed41047695f",
+        "android_client_info": {
+          "package_name": "com.hajzmr.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBKgCO3kjlLXIpDo7JTAVACvKkjdT64D5s"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
