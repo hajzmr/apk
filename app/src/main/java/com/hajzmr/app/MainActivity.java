@@ -71,6 +71,7 @@ public class MainActivity extends AppCompatActivity {
         settings.setSupportZoom(false);
         settings.setAllowFileAccess(true);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        settings.setTextZoom(100)
         settings.setUserAgentString(settings.getUserAgentString() + " HajzMRApp/1.0");
 
         webView.setWebViewClient(new WebViewClient() {
