@@ -2,16 +2,25 @@ package com.hajzmr.app;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
+import android.app.DownloadManager;
+import android.content.ContentValues;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.net.http.SslError;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
+import android.print.PrintAttributes;
+import android.print.PrintManager;
+import android.provider.MediaStore;
+import android.util.Base64;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.webkit.CookieManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.SslErrorHandler;
+import android.webkit.URLUtil;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -28,11 +37,17 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import com.google.firebase.messaging.FirebaseMessaging;
 
+import java.io.OutputStream;
+
 /**
  * يعرض موقع حجزمر داخل WebView كامل الشاشة، ويتكفّل بـ:
  *  - الحفاظ على تصفّح المستخدم داخل التطبيق (بدون فتح متصفح خارجي).
  *  - دعم رفع صور وصل الدفع (input type=file) من نموذج الحجز.
  *  - تسجيل توكن إشعارات Firebase (FCM) وربطه بحساب العميل بعد تسجيل الدخول.
+ *  - تحميل الملفات (تذكرة PDF، إلخ) عبر DownloadManager — WebView لا يحمّل
+ *    أي شيء تلقائياً بدون DownloadListener صريح.
+ *  - طباعة أصلية عبر PrintManager، لأن window.print() في الجافاسكربت لا
+ *    ينفّذ شيئاً داخل WebView افتراضياً (يحتاج تطبيق مضيف يوفر هذه الواجهة).
  */
 public class MainActivity extends AppCompatActivity {
 
@@ -136,6 +151,67 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
+        // ===== تحميل الملفات (تذكرة PDF، إلخ) =====
+        // بدون هذا، أي رابط تحميل (حتى لو كان تحميل HTTP عادي بترويسة
+        // Content-Disposition: attachment) يتجاهله WebView بصمت تماماً.
+        webView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
+            if (url != null && url.startsWith("data:")) {
+                // روابط data: (تُستخدم في زر "لقطة شاشة" عبر html-to-image) لا يدعمها
+                // DownloadManager إطلاقاً (يقبل http/https فقط) — نحفظها يدوياً كصورة.
+                saveDataUriImage(url, mimetype);
+                return;
+            }
+            try {
+                DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+                String cookies = CookieManager.getInstance().getCookie(url);
+                if (cookies != null) {
+                    request.addRequestHeader("Cookie", cookies);
+                }
+                request.addRequestHeader("User-Agent", userAgent);
+                request.setMimeType(mimetype);
+                String fileName = URLUtil.guessFileName(url, contentDisposition, mimetype);
+                request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
+                request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                request.allowScanningByMediaScanner();
+
+                DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+                if (dm != null) {
+                    dm.enqueue(request);
+                    Toast.makeText(getApplicationContext(), "جارٍ تحميل الملف...", Toast.LENGTH_SHORT).show();
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "فشل بدء التحميل", e);
+                Toast.makeText(getApplicationContext(), "تعذّر تحميل الملف", Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        // ===== طباعة أصلية =====
+        // window.print() في صفحات الموقع لا يفعل شيئاً بمفرده داخل WebView،
+        // لذا نوفر واجهة JS (AndroidPrint.printPage) تستدعي PrintManager
+        // الحقيقي على مستوى النظام. صفحات الموقع تتحقق من وجود هذه الواجهة
+        // وتستخدمها بدل window.print() عند توفرها.
+        webView.addJavascriptInterface(new Object() {
+            @JavascriptInterface
+            public void printPage() {
+                runOnUiThread(() -> {
+                    try {
+                        PrintManager printManager = (PrintManager) getSystemService(PRINT_SERVICE);
+                        String jobName = getString(R.string.app_name) + " - تذكرة";
+                        if (printManager != null) {
+                            printManager.print(
+                                jobName,
+                                webView.createPrintDocumentAdapter(jobName),
+                                new PrintAttributes.Builder().build()
+                            );
+                        }
+                    } catch (Exception e) {
+                        Log.e(TAG, "فشل بدء الطباعة", e);
+                        Toast.makeText(getApplicationContext(), "تعذّر بدء الطباعة", Toast.LENGTH_SHORT).show();
+                    }
+                });
+            }
+        }, "AndroidPrint");
+
         swipeRefresh.setOnRefreshListener(() -> webView.reload());
 
         webView.loadUrl(baseUrl);
@@ -144,12 +220,62 @@ public class MainActivity extends AppCompatActivity {
         registerFcmToken();
     }
 
+    /**
+     * يحفظ صورة قادمة كرابط data: (مثل ناتج زر "لقطة شاشة" عبر html-to-image)
+     * مباشرة في مجلد Pictures عبر MediaStore، لأن DownloadManager لا يدعم
+     * روابط data: إطلاقاً (http/https فقط).
+     */
+    private void saveDataUriImage(String dataUri, String mimetypeHint) {
+        try {
+            int commaIndex = dataUri.indexOf(',');
+            if (commaIndex < 0) throw new IllegalArgumentException("data URI غير صالح");
+            String meta = dataUri.substring(5, commaIndex); // بعد "data:"
+            String base64Data = dataUri.substring(commaIndex + 1);
+            String mimeType = meta.contains(";") ? meta.substring(0, meta.indexOf(';')) : meta;
+            if (mimeType.isEmpty()) mimeType = (mimetypeHint != null ? mimetypeHint : "image/png");
+            String extension = mimeType.contains("png") ? "png" : "jpg";
+
+            byte[] bytes = Base64.decode(base64Data, Base64.DEFAULT);
+            String fileName = "ticket_" + System.currentTimeMillis() + "." + extension;
+
+            ContentValues values = new ContentValues();
+            values.put(MediaStore.Images.Media.DISPLAY_NAME, fileName);
+            values.put(MediaStore.Images.Media.MIME_TYPE, mimeType);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                values.put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES);
+            }
+
+            Uri collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
+            Uri itemUri = getContentResolver().insert(collection, values);
+            if (itemUri == null) throw new IllegalStateException("تعذّر إنشاء ملف الصورة");
+
+            try (OutputStream out = getContentResolver().openOutputStream(itemUri)) {
+                if (out == null) throw new IllegalStateException("تعذّر فتح ملف الصورة للكتابة");
+                out.write(bytes);
+            }
+
+            Toast.makeText(getApplicationContext(), "تم حفظ لقطة الشاشة في الصور", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Log.e(TAG, "فشل حفظ لقطة الشاشة", e);
+            Toast.makeText(getApplicationContext(), "تعذّر حفظ لقطة الشاشة", Toast.LENGTH_SHORT).show();
+        }
+    }
+
     private void requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT >= 33) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
                     != PackageManager.PERMISSION_GRANTED) {
                 ActivityCompat.requestPermissions(this,
                         new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1001);
+            }
+        }
+        // على أندرويد 9 وأقدم فقط، يحتاج DownloadManager صراحة إذن الكتابة
+        // للتخزين الخارجي (WRITE_EXTERNAL_STORAGE) لحفظ الملفات في Downloads.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                    != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this,
+                        new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 1002);
             }
         }
     }
