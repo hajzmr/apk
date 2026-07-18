@@ -5,6 +5,7 @@ import android.annotation.SuppressLint;
 import android.app.DownloadManager;
 import android.content.ContentValues;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.net.http.SslError;
@@ -60,6 +61,14 @@ public class MainActivity extends AppCompatActivity {
 
     private String baseUrl;
 
+    // لغة الموقع الحالية كما يبلّغنا بها الجافاسكربت عبر واجهة AndroidLang
+    // (انظر lang-switcher.php)، تُستخدم لعرض إشعارات Toast الأصلية باللغة
+    // الصحيحة (تحميل الملف، حفظ لقطة الشاشة...). تُحفظ في SharedPreferences
+    // كي تبقى صحيحة حتى قبل أن تُحمَّل الصفحة وتُبلّغنا من جديد.
+    private static final String PREFS_NAME = "HajzMRPrefs";
+    private static final String PREF_LANG  = "site_lang";
+    private volatile String currentLang = "ar";
+
     @SuppressLint("SetJavaScriptEnabled")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -67,6 +76,9 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         baseUrl = getString(R.string.base_url);
+
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        currentLang = prefs.getString(PREF_LANG, "ar");
 
         webView      = findViewById(R.id.webView);
         swipeRefresh = findViewById(R.id.swipeRefresh);
@@ -177,11 +189,15 @@ public class MainActivity extends AppCompatActivity {
                 DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
                 if (dm != null) {
                     dm.enqueue(request);
-                    Toast.makeText(getApplicationContext(), "جارٍ تحميل الملف...", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(getApplicationContext(),
+                            tr("جارٍ تحميل الملف...", "Téléchargement du fichier..."),
+                            Toast.LENGTH_SHORT).show();
                 }
             } catch (Exception e) {
                 Log.e(TAG, "فشل بدء التحميل", e);
-                Toast.makeText(getApplicationContext(), "تعذّر تحميل الملف", Toast.LENGTH_SHORT).show();
+                Toast.makeText(getApplicationContext(),
+                        tr("تعذّر تحميل الملف", "Impossible de télécharger le fichier"),
+                        Toast.LENGTH_SHORT).show();
             }
         });
 
@@ -206,11 +222,29 @@ public class MainActivity extends AppCompatActivity {
                         }
                     } catch (Exception e) {
                         Log.e(TAG, "فشل بدء الطباعة", e);
-                        Toast.makeText(getApplicationContext(), "تعذّر بدء الطباعة", Toast.LENGTH_SHORT).show();
+                        Toast.makeText(getApplicationContext(),
+                                tr("تعذّر بدء الطباعة", "Impossible de démarrer l'impression"),
+                                Toast.LENGTH_SHORT).show();
                     }
                 });
             }
         }, "AndroidPrint");
+
+        // ===== مزامنة لغة الموقع مع التطبيق =====
+        // يستدعيها lang-switcher.php في كل مرة تُطبَّق فيها اللغة (عند تحميل
+        // الصفحة وعند تبديل المستخدم للغة)، لنعرف بأي لغة نعرض إشعارات
+        // Toast الأصلية أدناه.
+        webView.addJavascriptInterface(new Object() {
+            @JavascriptInterface
+            public void setLanguage(String lang) {
+                if (lang == null) return;
+                currentLang = "fr".equals(lang) ? "fr" : "ar";
+                getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                        .edit()
+                        .putString(PREF_LANG, currentLang)
+                        .apply();
+            }
+        }, "AndroidLang");
 
         swipeRefresh.setOnRefreshListener(() -> webView.reload());
 
@@ -218,6 +252,11 @@ public class MainActivity extends AppCompatActivity {
 
         requestNotificationPermissionIfNeeded();
         registerFcmToken();
+    }
+
+    /** يُرجع النص الفرنسي إذا كانت لغة الموقع الحالية fr، وإلا يُرجع النص العربي. */
+    private String tr(String ar, String fr) {
+        return "fr".equals(currentLang) ? fr : ar;
     }
 
     /**
@@ -254,10 +293,14 @@ public class MainActivity extends AppCompatActivity {
                 out.write(bytes);
             }
 
-            Toast.makeText(getApplicationContext(), "تم حفظ لقطة الشاشة في الصور", Toast.LENGTH_SHORT).show();
+            Toast.makeText(getApplicationContext(),
+                    tr("تم حفظ لقطة الشاشة في الصور", "Capture d'écran enregistrée dans les Photos"),
+                    Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
             Log.e(TAG, "فشل حفظ لقطة الشاشة", e);
-            Toast.makeText(getApplicationContext(), "تعذّر حفظ لقطة الشاشة", Toast.LENGTH_SHORT).show();
+            Toast.makeText(getApplicationContext(),
+                    tr("تعذّر حفظ لقطة الشاشة", "Impossible d'enregistrer la capture d'écran"),
+                    Toast.LENGTH_SHORT).show();
         }
     }
 
